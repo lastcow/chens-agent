@@ -100,6 +100,17 @@ app.post("/tools/:id/approve", async (req, res) => {
   res.json(tool);
 });
 
+// ─── Force re-seed a specific tool (updates code from seed definitions) ──────
+app.post("/tools/:name/reseed", async (req, res) => {
+  const { seedCoreTools } = await import("../tools/seed.js");
+  try {
+    await seedCoreTools(true); // force=true bypasses "already exists" skip
+    res.json({ success: true, message: "Core tools reseeded with latest definitions" });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── Dedup events ─────────────────────────────────────────────────
 app.get("/tools/dedup-log", async (_req, res) => {
   const events = await db.dedupEvent.findMany({

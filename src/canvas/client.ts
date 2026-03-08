@@ -4,7 +4,8 @@
  */
 
 const BASE = process.env.CANVAS_BASE_URL!; // https://frostburg.instructure.com/api/v1
-const TOKEN = process.env.CANVAS_TOKEN!;
+// TOKEN is read dynamically so per-task token overrides work
+function getToken() { return process.env.CANVAS_TOKEN ?? ""; }
 
 export interface CanvasRequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -44,7 +45,7 @@ export async function canvasRequest<T = unknown>(
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${TOKEN}`,
+      Authorization: `Bearer ${getToken()}`,
       "Content-Type": "application/json",
     },
     ...(body ? { body: JSON.stringify(body) } : {}),

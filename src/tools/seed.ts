@@ -17,8 +17,8 @@ const CORE_TOOLS = [
       output: { courses: { type: "array", description: "Array of course objects" } },
     },
     code: `
-const courses = await canvasRequest('/courses?enrollment_type=teacher&per_page=50');
-return { courses };`,
+const courses = await canvasRequest('/courses?enrollment_type=teacher&enrollment_state=active&per_page=50');
+return { courses: courses.map(c => ({ id: c.id, name: c.name, course_code: c.course_code, term: c.term?.name })) };`,
     tests: [{ input: {}, expectedOutput: { courses: [] } }],
     evolutionReason: "Core tool — seeded at startup",
     createdBy: "human",
@@ -241,21 +241,33 @@ return { page_url: result.html_url, title: result.title };`,
 
 let seeded = false;
 
-export async function seedCoreTools(): Promise<void> {
-  if (seeded) return;
-  seeded = true;
+export async function seedCoreTools(force = false): Promise<void> {
+  if (seeded && !force) return;
+  if (!force) seeded = true;
 
-  console.log("[SEED] Checking core tools...");
+  console.log(`[SEED] ${force ? "Force re-seeding" : "Checking"} core tools...`);
   for (const def of CORE_TOOLS) {
     const existing = await db.tool.findUnique({ where: { name: def.name } });
     if (!existing) {
       await registerTool(def, true);
-      // Auto-approve human-authored tools
       await db.tool.update({
         where: { name: def.name },
         data: { status: ToolStatus.APPROVED, approvedBy: "human", approvedAt: new Date() },
       });
       console.log(`[SEED] ✅ Registered: ${def.name}`);
+    } else if (force) {
+      // Update code + schema in place
+      await db.tool.update({
+        where: { name: def.name },
+        data: {
+          code: def.code,
+          schema: def.schema as object,
+          description: def.description,
+          version: { increment: 1 },
+          status: ToolStatus.APPROVED,
+        },
+      });
+      console.log(`[SEED] 🔄 Updated: ${def.name}`);
     }
   }
   console.log("[SEED] Core tools ready.");
