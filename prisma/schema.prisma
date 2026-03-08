@@ -64,6 +64,7 @@ model AgentTask {
   error       String?
   steps       Json?      // ReAct steps log
   toolsUsed   String[]
+  usage       Json?      // token + cost tracking per component
   createdBy   String     // user id
   startedAt   DateTime?
   completedAt DateTime?
