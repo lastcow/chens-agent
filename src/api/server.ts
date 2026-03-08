@@ -4,21 +4,14 @@
  */
 
 import express from "express";
-import { Redis } from "@upstash/redis";
 import { db } from "../db/client.js";
 import { getApprovedTools } from "../tools/registry.js";
 import { seedCoreTools } from "../tools/seed.js";
+import { enqueueTask } from "../queue/worker.js";
 import { TaskStatus } from "@prisma/client";
 
 const app = express();
 app.use(express.json());
-
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
-
-const QUEUE_KEY = "chens:agent:tasks";
 
 // ─── Auth middleware ──────────────────────────────────────────────
 function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -46,7 +39,7 @@ app.post("/tasks", async (req, res) => {
     data: { title: instruction.slice(0, 80), instruction, courseId, createdBy, status: TaskStatus.QUEUED },
   });
 
-  await redis.lpush(QUEUE_KEY, JSON.stringify({ taskId: task.id, canvasToken }));
+  enqueueTask(task.id, canvasToken);
 
   res.status(202).json({ taskId: task.id, status: "QUEUED" });
 });

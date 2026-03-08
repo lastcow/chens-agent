@@ -1,59 +1,50 @@
 /**
- * Queue worker — polls Upstash Redis for tasks and runs the agent.
- * Runs continuously on Fly.io.
+ * In-process task queue — no Redis polling.
+ * Tasks are enqueued directly and processed concurrently (max 3 at once).
  */
 
-import { Redis } from "@upstash/redis";
 import { runAgentTask } from "../agent/planner.js";
 import { db } from "../db/client.js";
 import { TaskStatus } from "@prisma/client";
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
+const MAX_CONCURRENT = 3;
+let activeCount = 0;
 
-const QUEUE_KEY = "chens:agent:tasks";
-const DLQ_KEY  = "chens:agent:dlq";
-const POLL_INTERVAL_MS = 10000; // 10s — saves ~87% of Redis requests vs 2s
-const MAX_RETRIES = 3;
-
-interface QueueMessage {
+interface QueueItem {
   taskId: string;
-  retries?: number;
   canvasToken?: string;
 }
 
-async function processTask(msg: QueueMessage): Promise<void> {
-  const { taskId, retries = 0, canvasToken } = msg;
-  console.log(`[WORKER] Processing task ${taskId} (attempt ${retries + 1})`);
+const queue: QueueItem[] = [];
+
+async function processNext(): Promise<void> {
+  if (activeCount >= MAX_CONCURRENT || queue.length === 0) return;
+
+  const item = queue.shift()!;
+  activeCount++;
+
+  console.log(`[WORKER] Processing task ${item.taskId} (active: ${activeCount})`);
 
   try {
-    await runAgentTask(taskId, canvasToken);
-
-    // Notify via Redis pub/sub
-    await redis.publish(`chens:task:${taskId}`, JSON.stringify({ status: "COMPLETED" }));
-    console.log(`[WORKER] ✅ Task ${taskId} completed`);
+    await runAgentTask(item.taskId, item.canvasToken);
+    console.log(`[WORKER] ✅ Task ${item.taskId} completed`);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    console.error(`[WORKER] ❌ Task ${taskId} failed:`, errorMsg);
-
-    if (retries < MAX_RETRIES) {
-      // Re-queue with incremented retry count
-      await redis.lpush(QUEUE_KEY, JSON.stringify({ taskId, retries: retries + 1 }));
-      console.log(`[WORKER] Requeued task ${taskId} (attempt ${retries + 2})`);
-    } else {
-      // Dead letter queue
-      await redis.lpush(DLQ_KEY, JSON.stringify({ taskId, error: errorMsg, retries }));
-      await redis.publish(`chens:task:${taskId}`, JSON.stringify({ status: "FAILED", error: errorMsg }));
-      console.error(`[WORKER] Task ${taskId} moved to DLQ after ${retries + 1} attempts`);
-    }
+    console.error(`[WORKER] ❌ Task ${item.taskId} failed:`, errorMsg);
+  } finally {
+    activeCount--;
+    processNext(); // pick up next item
   }
 }
 
+export function enqueueTask(taskId: string, canvasToken?: string): void {
+  queue.push({ taskId, canvasToken });
+  console.log(`[WORKER] Queued task ${taskId} (queue length: ${queue.length})`);
+  processNext();
+}
+
 export async function startWorker(): Promise<void> {
-  console.log("[WORKER] 🚀 ChensAgent worker started");
-  console.log(`[WORKER] Polling queue: ${QUEUE_KEY} every ${POLL_INTERVAL_MS}ms`);
+  console.log("[WORKER] 🚀 ChensAgent in-process worker started (no Redis polling)");
 
   // Recover any stuck RUNNING tasks on startup
   const stuckTasks = await db.agentTask.findMany({
@@ -65,33 +56,6 @@ export async function startWorker(): Promise<void> {
       where: { id: t.id },
       data: { status: TaskStatus.QUEUED },
     });
-    await redis.lpush(QUEUE_KEY, JSON.stringify({ taskId: t.id }));
-  }
-
-  // Main poll loop with exponential backoff on errors
-  let backoff = POLL_INTERVAL_MS;
-  while (true) {
-    try {
-      const result = await redis.rpop(QUEUE_KEY);
-      backoff = POLL_INTERVAL_MS; // reset on success
-
-      if (result !== null) {
-        const raw = typeof result === "string" ? result : JSON.stringify(result);
-        const msg: QueueMessage = typeof raw === "object" ? raw as QueueMessage : JSON.parse(raw);
-        await processTask(msg);
-      } else {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-      }
-    } catch (err) {
-      const errStr = String(err);
-      if (errStr.includes("max requests limit exceeded")) {
-        // Back off heavily if rate limited
-        backoff = Math.min(backoff * 2, 300_000); // max 5 min
-        console.error(`[WORKER] Upstash rate limit hit — backing off ${backoff / 1000}s`);
-      } else {
-        console.error("[WORKER] Poll error:", err);
-      }
-      await new Promise((r) => setTimeout(r, backoff));
-    }
+    enqueueTask(t.id);
   }
 }
