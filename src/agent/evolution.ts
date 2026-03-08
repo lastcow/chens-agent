@@ -28,7 +28,7 @@ export interface EvolutionResult {
   toolName?: string;
   toolId?: string;
   reason?: string;
-  sandboxResult?: Awaited<ReturnType<typeof runInSandbox>>;
+  sandboxResult?: Record<string, unknown>;
   attempts: number;
 }
 
@@ -127,11 +127,11 @@ Design a new Canvas LMS tool. Respond ONLY with valid JSON:
         data: {
           actor: "agent",
           action: "TOOL_QUARANTINED",
-          details: { name: def.name, sandboxResult, attempts },
+          details: { name: def.name, sandboxResult: sandboxResult as unknown as object, attempts } as object,
         },
       });
 
-      return { action: "FAILED", reason: "Sandbox failed after max attempts", sandboxResult, attempts };
+      return { action: "FAILED", reason: "Sandbox failed after max attempts", sandboxResult: sandboxResult as unknown as Record<string, unknown> | undefined, attempts };
     }
 
     // Step 4: Register
@@ -147,7 +147,7 @@ Design a new Canvas LMS tool. Respond ONLY with valid JSON:
       action: dedup.action === "EXTEND_EXISTING" ? "EXTENDED" : "CREATED",
       toolName: tool.name,
       toolId: tool.id,
-      sandboxResult,
+      sandboxResult: sandboxResult as unknown as Record<string, unknown>,
       attempts,
     };
   }

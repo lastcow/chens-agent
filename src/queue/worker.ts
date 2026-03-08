@@ -70,12 +70,11 @@ export async function startWorker(): Promise<void> {
   // Main poll loop
   while (true) {
     try {
-      // BRPOP: block until message arrives (max 2s timeout)
-      const result = await redis.brpop(QUEUE_KEY, 2);
+      const result = await redis.rpop(QUEUE_KEY);
 
-      if (result) {
-        const [, raw] = result as [string, string];
-        const msg: QueueMessage = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (result !== null) {
+        const raw = typeof result === "string" ? result : JSON.stringify(result);
+        const msg: QueueMessage = JSON.parse(raw);
         await processTask(msg);
       }
     } catch (err) {

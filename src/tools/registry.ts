@@ -115,9 +115,9 @@ export async function registerTool(
       data: {
         version:        { increment: 1 },
         description:    def.description,
-        schema:         def.schema,
+        schema:         def.schema as unknown as object,
         code:           def.code,
-        tests:          def.tests,
+        tests:          def.tests as unknown as object[],
         tier:           def.tier,
         status,
         sandboxPassedAt: sandboxPassed ? new Date() : undefined,
@@ -130,9 +130,9 @@ export async function registerTool(
       data: {
         name:           def.name,
         description:    def.description,
-        schema:         def.schema,
+        schema:         def.schema as unknown as object,
         code:           def.code,
-        tests:          def.tests,
+        tests:          def.tests as unknown as object[],
         tier:           def.tier,
         status,
         createdBy:      def.createdBy ?? "agent",
@@ -203,7 +203,7 @@ export async function executeTool(
   const duration = Date.now() - start;
 
   await db.toolExecution.create({
-    data: { toolId: tool.id, taskId, input, output: output as object, durationMs: duration, success },
+    data: { toolId: tool.id, taskId, input: input as unknown as object, output: output as unknown as object, durationMs: duration, success },
   });
 
   await db.tool.update({
