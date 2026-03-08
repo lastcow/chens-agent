@@ -13,6 +13,7 @@ let activeCount = 0;
 interface QueueItem {
   taskId: string;
   canvasToken?: string;
+  model?: string;
 }
 
 const queue: QueueItem[] = [];
@@ -23,10 +24,10 @@ async function processNext(): Promise<void> {
   const item = queue.shift()!;
   activeCount++;
 
-  console.log(`[WORKER] Processing task ${item.taskId} (active: ${activeCount})`);
+  console.log(`[WORKER] Processing task ${item.taskId} model=${item.model ?? "default"} (active: ${activeCount})`);
 
   try {
-    await runAgentTask(item.taskId, item.canvasToken);
+    await runAgentTask(item.taskId, item.canvasToken, item.model);
     console.log(`[WORKER] ✅ Task ${item.taskId} completed`);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -37,8 +38,8 @@ async function processNext(): Promise<void> {
   }
 }
 
-export function enqueueTask(taskId: string, canvasToken?: string): void {
-  queue.push({ taskId, canvasToken });
+export function enqueueTask(taskId: string, canvasToken?: string, model?: string): void {
+  queue.push({ taskId, canvasToken, model });
   console.log(`[WORKER] Queued task ${taskId} (queue length: ${queue.length})`);
   processNext();
 }

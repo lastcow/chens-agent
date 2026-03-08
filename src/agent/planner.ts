@@ -13,20 +13,16 @@ const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 
 const MAX_STEPS = 15;
 
-// Pricing (as of 2025) — update if changed
-const PRICING = {
-  claude: {
-    model: "claude-sonnet-4-5",
-    inputPerMTok: 3.00,   // $3.00 per 1M input tokens
-    outputPerMTok: 15.00, // $15.00 per 1M output tokens
-  },
-  flyio: {
-    perSecond: 0.0000019, // shared-cpu-1x @ ~$0.0000019/s
-  },
-  gemini: {
-    embeddingPerMTok: 0.0, // free tier
-  },
+const DEFAULT_MODEL = "claude-haiku-3-5";
+
+const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
+  "claude-haiku-3-5":   { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
+  "claude-sonnet-4-5":  { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
+  "claude-sonnet-4-6":  { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
+  "gemini-2.0-flash":   { inputPerMTok: 0.10,  outputPerMTok: 0.40  },
 };
+
+const FLYIO_PER_SECOND = 0.0000019; // shared-cpu-1x
 
 interface UsageSummary {
   claude: { inputTokens: number; outputTokens: number; calls: number; costUsd: number };
@@ -43,14 +39,18 @@ interface ReActStep {
   evolved?: boolean;
 }
 
-export async function runAgentTask(taskId: string, canvasToken?: string): Promise<void> {
+export async function runAgentTask(taskId: string, canvasToken?: string, modelOverride?: string): Promise<void> {
   const task = await db.agentTask.findUnique({ where: { id: taskId } });
   if (!task) throw new Error(`Task ${taskId} not found`);
 
   const { setActiveToken } = await import("../canvas/client.js");
   setActiveToken(canvasToken ?? null);
 
+  const model = modelOverride ?? DEFAULT_MODEL;
+  const modelPricing = MODEL_PRICING[model] ?? MODEL_PRICING[DEFAULT_MODEL];
   const taskStartMs = Date.now();
+
+  console.log(`[AGENT] Using model: ${model} ($${modelPricing.inputPerMTok}/M in, $${modelPricing.outputPerMTok}/M out)`);
 
   await db.agentTask.update({
     where: { id: taskId },
@@ -62,7 +62,8 @@ export async function runAgentTask(taskId: string, canvasToken?: string): Promis
   let stepNum = 0;
 
   // Usage accumulators
-  const usage: UsageSummary = {
+  const usage: UsageSummary & { model: string } = {
+    model,
     claude: { inputTokens: 0, outputTokens: 0, calls: 0, costUsd: 0 },
     flyio: { durationMs: 0, costUsd: 0 },
     gemini: { embeddingCalls: 0, costUsd: 0 },
@@ -72,10 +73,10 @@ export async function runAgentTask(taskId: string, canvasToken?: string): Promis
   const finalizeUsage = () => {
     const durationMs = Date.now() - taskStartMs;
     usage.flyio.durationMs = durationMs;
-    usage.flyio.costUsd = parseFloat(((durationMs / 1000) * PRICING.flyio.perSecond).toFixed(8));
+    usage.flyio.costUsd = parseFloat(((durationMs / 1000) * FLYIO_PER_SECOND).toFixed(8));
     usage.claude.costUsd = parseFloat((
-      (usage.claude.inputTokens / 1_000_000) * PRICING.claude.inputPerMTok +
-      (usage.claude.outputTokens / 1_000_000) * PRICING.claude.outputPerMTok
+      (usage.claude.inputTokens / 1_000_000) * modelPricing.inputPerMTok +
+      (usage.claude.outputTokens / 1_000_000) * modelPricing.outputPerMTok
     ).toFixed(6));
     usage.totalCostUsd = parseFloat((usage.claude.costUsd + usage.flyio.costUsd + usage.gemini.costUsd).toFixed(6));
   };
@@ -111,7 +112,7 @@ NEED_TOOL: description of the capability needed`,
       stepNum++;
 
       const response = await claude.messages.create({
-        model: PRICING.claude.model,
+        model,
         max_tokens: 1500,
         messages,
       });

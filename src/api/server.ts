@@ -32,14 +32,14 @@ app.get("/health", (_req, res) => {
 
 // ─── Submit task ─────────────────────────────────────────────────
 app.post("/tasks", async (req, res) => {
-  const { instruction, courseId, createdBy = "teacher", canvasToken } = req.body;
+  const { instruction, courseId, createdBy = "teacher", canvasToken, model } = req.body;
   if (!instruction) { res.status(400).json({ error: "instruction is required" }); return; }
 
   const task = await db.agentTask.create({
     data: { title: instruction.slice(0, 80), instruction, courseId, createdBy, status: TaskStatus.QUEUED },
   });
 
-  enqueueTask(task.id, canvasToken);
+  enqueueTask(task.id, canvasToken, model);
 
   res.status(202).json({ taskId: task.id, status: "QUEUED" });
 });
