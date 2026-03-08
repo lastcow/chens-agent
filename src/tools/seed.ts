@@ -17,10 +17,12 @@ const CORE_TOOLS = [
       output: { courses: { type: "array", description: "Array of course objects" } },
     },
     code: `
-const CURRENT_TERM_ID = 245; // 2026 Spring
+// Dynamically find the current term: highest term_id among active courses
 const courses = await canvasRequest('/courses?enrollment_type=teacher&enrollment_state=active&per_page=100');
-const current = courses.filter(c => c.enrollment_term_id === CURRENT_TERM_ID);
-return { courses: current.map(c => ({ id: c.id, name: c.name, course_code: c.course_code })) };`,
+const termIds = courses.map(c => c.enrollment_term_id).filter(id => id && id > 1);
+const currentTermId = Math.max(...termIds);
+const current = courses.filter(c => c.enrollment_term_id === currentTermId);
+return { courses: current.map(c => ({ id: c.id, name: c.name, course_code: c.course_code })), term_id: currentTermId };`,
     tests: [{ input: {}, expectedOutput: { courses: [] } }],
     evolutionReason: "Core tool — seeded at startup",
     createdBy: "human",
