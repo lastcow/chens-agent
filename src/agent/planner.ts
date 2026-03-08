@@ -21,9 +21,14 @@ interface ReActStep {
   evolved?: boolean;
 }
 
-export async function runAgentTask(taskId: string): Promise<void> {
+export async function runAgentTask(taskId: string, canvasToken?: string): Promise<void> {
   const task = await db.agentTask.findUnique({ where: { id: taskId } });
   if (!task) throw new Error(`Task ${taskId} not found`);
+
+  // Use per-task token if provided, else fall back to env
+  if (canvasToken) {
+    process.env.CANVAS_TOKEN = canvasToken;
+  }
 
   await db.agentTask.update({
     where: { id: taskId },

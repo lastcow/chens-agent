@@ -21,14 +21,15 @@ const MAX_RETRIES = 3;
 interface QueueMessage {
   taskId: string;
   retries?: number;
+  canvasToken?: string;
 }
 
 async function processTask(msg: QueueMessage): Promise<void> {
-  const { taskId, retries = 0 } = msg;
+  const { taskId, retries = 0, canvasToken } = msg;
   console.log(`[WORKER] Processing task ${taskId} (attempt ${retries + 1})`);
 
   try {
-    await runAgentTask(taskId);
+    await runAgentTask(taskId, canvasToken);
 
     // Notify via Redis pub/sub
     await redis.publish(`chens:task:${taskId}`, JSON.stringify({ status: "COMPLETED" }));
@@ -74,7 +75,7 @@ export async function startWorker(): Promise<void> {
 
       if (result !== null) {
         const raw = typeof result === "string" ? result : JSON.stringify(result);
-        const msg: QueueMessage = JSON.parse(raw);
+        const msg: QueueMessage = typeof raw === "object" ? raw as QueueMessage : JSON.parse(raw);
         await processTask(msg);
       }
     } catch (err) {
