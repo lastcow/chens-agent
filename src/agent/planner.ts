@@ -52,7 +52,7 @@ const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: numbe
   "claude-haiku-4-5-20251001":  { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
   "claude-sonnet-4-5-20250929": { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
   "claude-sonnet-4-6":          { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
-  "gemini-2.0-flash":           { inputPerMTok: 0.10,  outputPerMTok: 0.40  },
+  "gemini-2.5-flash":           { inputPerMTok: 0.15,  outputPerMTok: 0.60  },
 };
 
 const FLYIO_PER_SECOND = 0.0000019; // shared-cpu-1x
