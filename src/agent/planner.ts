@@ -25,10 +25,9 @@ export async function runAgentTask(taskId: string, canvasToken?: string): Promis
   const task = await db.agentTask.findUnique({ where: { id: taskId } });
   if (!task) throw new Error(`Task ${taskId} not found`);
 
-  // Use per-task token if provided, else fall back to env
-  if (canvasToken) {
-    process.env.CANVAS_TOKEN = canvasToken;
-  }
+  // Set per-task canvas token so the client uses it for this task
+  const { setActiveToken } = await import("../canvas/client.js");
+  setActiveToken(canvasToken ?? null);
 
   await db.agentTask.update({
     where: { id: taskId },
@@ -175,5 +174,8 @@ NEED_TOOL: description of the capability needed`,
       },
     });
     throw err;
+  } finally {
+    // Always clear the per-task token
+    setActiveToken(null);
   }
 }

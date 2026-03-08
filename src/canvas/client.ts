@@ -4,8 +4,11 @@
  */
 
 const BASE = process.env.CANVAS_BASE_URL!; // https://frostburg.instructure.com/api/v1
-// TOKEN is read dynamically so per-task token overrides work
-function getToken() { return process.env.CANVAS_TOKEN ?? ""; }
+
+// Per-task token override (set before each task execution)
+let _activeToken: string | null = null;
+export function setActiveToken(token: string | null) { _activeToken = token; }
+function getToken() { return _activeToken ?? process.env.CANVAS_TOKEN ?? ""; }
 
 export interface CanvasRequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";

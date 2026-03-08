@@ -175,7 +175,8 @@ export async function getApprovedTools(): Promise<Tool[]> {
 export async function executeTool(
   toolName: string,
   input: Record<string, unknown>,
-  taskId?: string
+  taskId?: string,
+  options?: { canvasToken?: string }
 ): Promise<unknown> {
   const tool = await db.tool.findUnique({ where: { name: toolName } });
   if (!tool || tool.status !== ToolStatus.APPROVED) {
@@ -193,7 +194,8 @@ export async function executeTool(
       `const __fn = async (input) => { ${tool.code}\n}; return __fn(input);`
     );
 
-    const { canvasRequest } = await import("../canvas/client.js");
+    const { canvasRequest, setActiveToken } = await import("../canvas/client.js");
+    if (options?.canvasToken) setActiveToken(options.canvasToken);
     output = await fn(input, canvasRequest, () => { throw new Error("require() not allowed in tools"); });
     success = true;
   } catch (err) {
