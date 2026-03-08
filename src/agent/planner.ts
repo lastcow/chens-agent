@@ -4,22 +4,48 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getApprovedTools, executeTool } from "../tools/registry.js";
 import { evolveNewTool } from "./evolution.js";
 import { db } from "../db/client.js";
 import { TaskStatus } from "@prisma/client";
 
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+function isGeminiModel(model: string) { return model.startsWith("gemini"); }
+
+async function callLLM(model: string, messages: Anthropic.MessageParam[], systemPrompt: string): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  if (isGeminiModel(model)) {
+    const gemModel = genai.getGenerativeModel({ model });
+    // Convert messages to Gemini format
+    const history = messages.slice(0, -1).map(m => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: typeof m.content === "string" ? m.content : (m.content[0] as { text: string }).text }],
+    }));
+    const lastMsg = messages[messages.length - 1];
+    const lastText = typeof lastMsg.content === "string" ? lastMsg.content : (lastMsg.content[0] as { text: string }).text;
+    const chat = gemModel.startChat({ history, systemInstruction: systemPrompt });
+    const result = await chat.sendMessage(lastText);
+    const text = result.response.text();
+    const meta = result.response.usageMetadata;
+    return { text, inputTokens: meta?.promptTokenCount ?? 0, outputTokens: meta?.candidatesTokenCount ?? 0 };
+  }
+  // Default: Claude
+  const response = await claude.messages.create({ model, max_tokens: 1500, messages });
+  const text = response.content[0].type === "text" ? response.content[0].text : "";
+  return { text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+}
 
 const MAX_STEPS = 15;
 
-const DEFAULT_MODEL = "claude-haiku-3-5";
+const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 
 const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
-  "claude-haiku-3-5":   { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
-  "claude-sonnet-4-5":  { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
-  "claude-sonnet-4-6":  { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
-  "gemini-2.0-flash":   { inputPerMTok: 0.10,  outputPerMTok: 0.40  },
+  "claude-haiku-4-5-20251001":  { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
+  "claude-sonnet-4-5-20250929": { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
+  "claude-sonnet-4-6":          { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
+  "gemini-2.0-flash":           { inputPerMTok: 0.10,  outputPerMTok: 0.40  },
 };
 
 const FLYIO_PER_SECOND = 0.0000019; // shared-cpu-1x
@@ -111,19 +137,14 @@ NEED_TOOL: description of the capability needed`,
     while (stepNum < MAX_STEPS) {
       stepNum++;
 
-      const response = await claude.messages.create({
-        model,
-        max_tokens: 1500,
-        messages,
-      });
+      const { text, inputTokens, outputTokens } = await callLLM(model, messages, messages[0].content as string);
 
       // Track token usage
       usage.claude.calls++;
-      usage.claude.inputTokens += response.usage.input_tokens;
-      usage.claude.outputTokens += response.usage.output_tokens;
+      usage.claude.inputTokens += inputTokens;
+      usage.claude.outputTokens += outputTokens;
 
-      const text = response.content[0].type === "text" ? response.content[0].text : "";
-      console.log(`[AGENT] Step ${stepNum} (in:${response.usage.input_tokens} out:${response.usage.output_tokens}):\n${text}`);
+      console.log(`[AGENT] Step ${stepNum} (in:${inputTokens} out:${outputTokens}):\n${text}`);
 
       // Parse NEED_TOOL request
       const needTool = text.match(/NEED_TOOL:\s*(.+)/);
