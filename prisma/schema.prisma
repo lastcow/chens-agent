@@ -1,0 +1,127 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ─── Tool Registry ────────────────────────────────────────────────
+model Tool {
+  id             String   @id @default(cuid())
+  name           String   @unique
+  version        Int      @default(1)
+  description    String
+  schema         Json     // JSON Schema for input/output
+  code           String   // TypeScript source
+  tests          Json     // array of {input, expectedOutput}
+  tier           ToolTier @default(GREEN)
+  status         ToolStatus @default(PENDING_SANDBOX)
+  createdBy      String   @default("agent") // "agent" | "human"
+  approvedBy     String?
+  approvedAt     DateTime?
+  sandboxPassedAt DateTime?
+  usageCount     Int      @default(0)
+  lastUsedAt     DateTime?
+  dedupBlocked   Int      @default(0)
+  variantOfId    String?
+  variantOf      Tool?    @relation("ToolVariants", fields: [variantOfId], references: [id])
+  variants       Tool[]   @relation("ToolVariants")
+  evolutionReason String?
+  embeddingText  String?  // text that was embedded
+  // embedding stored as raw float array (pgvector via raw SQL)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  executions     ToolExecution[]
+  dedupEvents    DedupEvent[] @relation("MatchedTool")
+}
+
+enum ToolTier {
+  GREEN  // read-only, auto-approved
+  YELLOW // write non-destructive, auto-approved + logged
+  RED    // delete/bulk/mass-message, requires human approval
+}
+
+enum ToolStatus {
+  PENDING_SANDBOX
+  SANDBOX_FAILED
+  PENDING_APPROVAL
+  APPROVED
+  DEPRECATED
+  QUARANTINED
+}
+
+// ─── Task Queue ───────────────────────────────────────────────────
+model AgentTask {
+  id          String     @id @default(cuid())
+  title       String
+  instruction String     // natural language from teacher
+  courseId    String?
+  status      TaskStatus @default(QUEUED)
+  result      Json?
+  error       String?
+  steps       Json?      // ReAct steps log
+  toolsUsed   String[]
+  createdBy   String     // user id
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime   @default(now())
+  executions  ToolExecution[]
+}
+
+enum TaskStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ─── Tool Execution Log ───────────────────────────────────────────
+model ToolExecution {
+  id          String    @id @default(cuid())
+  toolId      String
+  tool        Tool      @relation(fields: [toolId], references: [id])
+  taskId      String?
+  task        AgentTask? @relation(fields: [taskId], references: [id])
+  input       Json
+  output      Json?
+  durationMs  Int?
+  success     Boolean
+  canvasCalls Int       @default(0)
+  flagged     Boolean   @default(false)
+  flagReason  String?
+  createdAt   DateTime  @default(now())
+}
+
+// ─── Deduplication Log ────────────────────────────────────────────
+model DedupEvent {
+  id           String @id @default(cuid())
+  proposedName String
+  proposedDesc String
+  matchedId    String?
+  matchedTool  Tool?  @relation("MatchedTool", fields: [matchedId], references: [id])
+  similarity   Float?
+  action       DedupAction
+  llmReason    String?
+  createdAt    DateTime @default(now())
+}
+
+enum DedupAction {
+  USE_EXISTING
+  EXTEND_EXISTING
+  REGISTER_NEW
+  BLOCKED
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String   // "agent" | user id
+  action    String
+  target    String?
+  details   Json?
+  createdAt DateTime @default(now())
+}
