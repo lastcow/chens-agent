@@ -56,7 +56,7 @@ app.get("/tasks", async (_req, res) => {
   const tasks = await db.agentTask.findMany({
     orderBy: { createdAt: "desc" },
     take: 50,
-    select: { id: true, title: true, status: true, createdAt: true, completedAt: true, toolsUsed: true },
+    select: { id: true, title: true, status: true, createdAt: true, completedAt: true, toolsUsed: true, result: true, error: true },
   });
   res.json({ tasks });
 });
