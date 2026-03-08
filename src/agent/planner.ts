@@ -153,6 +153,12 @@ NEED_TOOL: description of the capability needed`,
 
       console.log(`[AGENT] Step ${stepNum} (in:${inputTokens} out:${outputTokens}):\n${text}`);
 
+      // Push live step to DB so UI can poll it
+      await db.agentTask.update({
+        where: { id: taskId },
+        data: { steps: steps as unknown as object[] },
+      });
+
       // Parse NEED_TOOL request
       const needTool = text.match(/NEED_TOOL:\s*(.+)/);
       if (needTool) {
@@ -178,7 +184,7 @@ NEED_TOOL: description of the capability needed`,
         continue;
       }
 
-      // Parse Action
+      // Push step with action info to DB
       const actionMatch = text.match(/Action:\s*(\w+)\s*\((\{[\s\S]*?\})\)/);
       if (actionMatch) {
         const [, toolName, inputStr] = actionMatch;
@@ -186,6 +192,12 @@ NEED_TOOL: description of the capability needed`,
         try { input = JSON.parse(inputStr); } catch { /* ignore */ }
 
         steps.push({ step: stepNum, thought: text, action: { tool: toolName, input } });
+
+        // Push "calling tool" state to DB immediately
+        await db.agentTask.update({
+          where: { id: taskId },
+          data: { steps: steps as unknown as object[] },
+        });
 
         let observation: unknown;
         try {
@@ -196,6 +208,13 @@ NEED_TOOL: description of the capability needed`,
         }
 
         steps[steps.length - 1].observation = observation;
+
+        // Push completed step (with observation) to DB
+        await db.agentTask.update({
+          where: { id: taskId },
+          data: { steps: steps as unknown as object[] },
+        });
+
         messages.push({ role: "assistant", content: text });
         messages.push({ role: "user", content: `Observation: ${JSON.stringify(observation)}` });
         continue;
