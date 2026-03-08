@@ -4,8 +4,8 @@
  */
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY!;
-const EMBED_MODEL = "gemini-embedding-exp-03-07";
-const EMBED_DIM = 1536;
+const EMBED_MODEL = "gemini-embedding-001";
+const EMBED_DIM = 1024;
 
 export async function embedText(text: string): Promise<number[]> {
   const res = await fetch(
