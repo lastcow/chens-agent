@@ -15,7 +15,7 @@ const redis = new Redis({
 
 const QUEUE_KEY = "chens:agent:tasks";
 const DLQ_KEY  = "chens:agent:dlq";
-const POLL_INTERVAL_MS = 2000;
+const POLL_INTERVAL_MS = 10000; // 10s — saves ~87% of Redis requests vs 2s
 const MAX_RETRIES = 3;
 
 interface QueueMessage {
@@ -68,19 +68,30 @@ export async function startWorker(): Promise<void> {
     await redis.lpush(QUEUE_KEY, JSON.stringify({ taskId: t.id }));
   }
 
-  // Main poll loop
+  // Main poll loop with exponential backoff on errors
+  let backoff = POLL_INTERVAL_MS;
   while (true) {
     try {
       const result = await redis.rpop(QUEUE_KEY);
+      backoff = POLL_INTERVAL_MS; // reset on success
 
       if (result !== null) {
         const raw = typeof result === "string" ? result : JSON.stringify(result);
         const msg: QueueMessage = typeof raw === "object" ? raw as QueueMessage : JSON.parse(raw);
         await processTask(msg);
+      } else {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
       }
     } catch (err) {
-      console.error("[WORKER] Poll error:", err);
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const errStr = String(err);
+      if (errStr.includes("max requests limit exceeded")) {
+        // Back off heavily if rate limited
+        backoff = Math.min(backoff * 2, 300_000); // max 5 min
+        console.error(`[WORKER] Upstash rate limit hit — backing off ${backoff / 1000}s`);
+      } else {
+        console.error("[WORKER] Poll error:", err);
+      }
+      await new Promise((r) => setTimeout(r, backoff));
     }
   }
 }
