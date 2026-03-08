@@ -17,8 +17,10 @@ const CORE_TOOLS = [
       output: { courses: { type: "array", description: "Array of course objects" } },
     },
     code: `
-const courses = await canvasRequest('/courses?enrollment_type=teacher&enrollment_state=active&per_page=50');
-return { courses: courses.map(c => ({ id: c.id, name: c.name, course_code: c.course_code, term: c.term?.name })) };`,
+const CURRENT_TERM_ID = 245; // 2026 Spring
+const courses = await canvasRequest('/courses?enrollment_type=teacher&enrollment_state=active&per_page=100');
+const current = courses.filter(c => c.enrollment_term_id === CURRENT_TERM_ID);
+return { courses: current.map(c => ({ id: c.id, name: c.name, course_code: c.course_code })) };`,
     tests: [{ input: {}, expectedOutput: { courses: [] } }],
     evolutionReason: "Core tool — seeded at startup",
     createdBy: "human",
