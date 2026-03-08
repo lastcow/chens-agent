@@ -15,23 +15,30 @@ const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 function isGeminiModel(model: string) { return model.startsWith("gemini"); }
 
-async function callLLM(model: string, messages: Anthropic.MessageParam[], systemPrompt: string): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+function msgText(m: Anthropic.MessageParam): string {
+  return typeof m.content === "string" ? m.content : (m.content[0] as { text: string }).text;
+}
+
+async function callLLM(model: string, messages: Anthropic.MessageParam[], _systemPrompt: string): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
   if (isGeminiModel(model)) {
-    const gemModel = genai.getGenerativeModel({ model });
-    // Convert messages to Gemini format
-    const history = messages.slice(0, -1).map(m => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: typeof m.content === "string" ? m.content : (m.content[0] as { text: string }).text }],
+    const gemModel = genai.getGenerativeModel({
+      model,
+      systemInstruction: { role: "user", parts: [{ text: "You are a helpful AI agent." }] },
+    });
+    // Gemini: flatten system prompt into first user message, convert rest to history
+    const allMessages = messages.map(m => ({
+      role: m.role === "assistant" ? "model" as const : "user" as const,
+      parts: [{ text: msgText(m) }],
     }));
-    const lastMsg = messages[messages.length - 1];
-    const lastText = typeof lastMsg.content === "string" ? lastMsg.content : (lastMsg.content[0] as { text: string }).text;
-    const chat = gemModel.startChat({ history, systemInstruction: systemPrompt });
+    const history = allMessages.slice(0, -1);
+    const lastText = msgText(messages[messages.length - 1]);
+    const chat = gemModel.startChat({ history });
     const result = await chat.sendMessage(lastText);
     const text = result.response.text();
     const meta = result.response.usageMetadata;
     return { text, inputTokens: meta?.promptTokenCount ?? 0, outputTokens: meta?.candidatesTokenCount ?? 0 };
   }
-  // Default: Claude
+  // Anthropic Claude
   const response = await claude.messages.create({ model, max_tokens: 1500, messages });
   const text = response.content[0].type === "text" ? response.content[0].text : "";
   return { text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
