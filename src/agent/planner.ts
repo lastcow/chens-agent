@@ -81,6 +81,37 @@ async function callLLM(model: string, messages: Anthropic.MessageParam[], _syste
 
 const MAX_STEPS = 15;
 
+async function logRunToChensAPI(userId: string, model: string, usage: UsageSummary & { model: string; totalCostUsd: number }): Promise<void> {
+  const apiUrl  = process.env.CHENS_API_URL;
+  const apiKey  = process.env.CHENS_API_SECRET_KEY;
+  if (!apiUrl || !apiKey) return;
+
+  const provider = isNvidiaModel(model) ? "nvidia" : isGeminiModel(model) ? "google" : "anthropic";
+
+  await fetch(`${apiUrl}/api/user/agent-runs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key":   apiKey,
+      "x-user-id":   userId,
+    },
+    body: JSON.stringify({
+      model,
+      provider,
+      task_type:     "agent",
+      input_tokens:  usage.claude.inputTokens,
+      output_tokens: usage.claude.outputTokens,
+      cost_usd:      usage.totalCostUsd,
+      metadata: {
+        fly_ms:      usage.flyio.durationMs,
+        fly_cost:    usage.flyio.costUsd,
+        llm_cost:    usage.claude.costUsd,
+        calls:       usage.claude.calls,
+      },
+    }),
+  });
+}
+
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 
 const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
@@ -290,6 +321,11 @@ NEED_TOOL: description of the capability needed`,
             details: { toolsUsed, stepCount: stepNum, usage } as object,
           },
         });
+
+        // Log run to ChensAPI for profile cost tracking
+        await logRunToChensAPI(task.createdBy, model, usage).catch(e =>
+          console.warn("[AGENT] Failed to log run to ChensAPI:", e)
+        );
 
         console.log(`[AGENT] ✅ Done — Claude: ${usage.claude.inputTokens}in/${usage.claude.outputTokens}out ($${usage.claude.costUsd}) | Fly: ${usage.flyio.durationMs}ms ($${usage.flyio.costUsd}) | Total: $${usage.totalCostUsd}`);
         return;
