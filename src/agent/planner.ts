@@ -5,6 +5,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
 import { getApprovedTools, executeTool } from "../tools/registry.js";
 import { evolveNewTool } from "./evolution.js";
 import { db } from "../db/client.js";
@@ -12,8 +13,24 @@ import { TaskStatus } from "@prisma/client";
 
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
 const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const nvidia = new OpenAI({
+  baseURL: "https://integrate.api.nvidia.com/v1",
+  apiKey: process.env.NVIDIA_API_KEY!,
+});
 
 function isGeminiModel(model: string) { return model.startsWith("gemini"); }
+function isNvidiaModel(model: string)  { return NVIDIA_MODELS.has(model); }
+
+// Curated NVIDIA NIM models available via integrate.api.nvidia.com
+export const NVIDIA_MODELS = new Set([
+  "meta/llama-3.3-70b-instruct",
+  "meta/llama-3.1-405b-instruct",
+  "nvidia/llama-3.1-nemotron-70b-instruct",
+  "deepseek-ai/deepseek-r1-distill-qwen-32b",
+  "deepseek-ai/deepseek-v3.2",
+  "mistralai/mixtral-8x22b-instruct-v0.1",
+  "google/gemma-3-27b-it",
+]);
 
 function msgText(m: Anthropic.MessageParam): string {
   return typeof m.content === "string" ? m.content : (m.content[0] as { text: string }).text;
@@ -25,7 +42,6 @@ async function callLLM(model: string, messages: Anthropic.MessageParam[], _syste
       model,
       systemInstruction: { role: "user", parts: [{ text: "You are a helpful AI agent." }] },
     });
-    // Gemini: flatten system prompt into first user message, convert rest to history
     const allMessages = messages.map(m => ({
       role: m.role === "assistant" ? "model" as const : "user" as const,
       parts: [{ text: msgText(m) }],
@@ -38,7 +54,26 @@ async function callLLM(model: string, messages: Anthropic.MessageParam[], _syste
     const meta = result.response.usageMetadata;
     return { text, inputTokens: meta?.promptTokenCount ?? 0, outputTokens: meta?.candidatesTokenCount ?? 0 };
   }
-  // Anthropic Claude
+
+  if (isNvidiaModel(model)) {
+    const oaiMessages = messages.map(m => ({
+      role: m.role as "user" | "assistant",
+      content: msgText(m),
+    }));
+    const resp = await nvidia.chat.completions.create({
+      model,
+      messages: oaiMessages,
+      max_tokens: 1500,
+    });
+    const text = resp.choices[0]?.message?.content ?? "";
+    return {
+      text,
+      inputTokens: resp.usage?.prompt_tokens ?? 0,
+      outputTokens: resp.usage?.completion_tokens ?? 0,
+    };
+  }
+
+  // Anthropic Claude (default)
   const response = await claude.messages.create({ model, max_tokens: 1500, messages });
   const text = response.content[0].type === "text" ? response.content[0].text : "";
   return { text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
@@ -49,10 +84,20 @@ const MAX_STEPS = 15;
 const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 
 const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
+  // Anthropic
   "claude-haiku-4-5-20251001":  { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
   "claude-sonnet-4-5-20250929": { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
   "claude-sonnet-4-6":          { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
+  // Google
   "gemini-2.5-flash":           { inputPerMTok: 0.15,  outputPerMTok: 0.60  },
+  // NVIDIA NIM
+  "meta/llama-3.3-70b-instruct":               { inputPerMTok: 0.77,  outputPerMTok: 0.77  },
+  "meta/llama-3.1-405b-instruct":              { inputPerMTok: 5.00,  outputPerMTok: 16.00 },
+  "nvidia/llama-3.1-nemotron-70b-instruct":    { inputPerMTok: 0.35,  outputPerMTok: 0.40  },
+  "deepseek-ai/deepseek-r1-distill-qwen-32b":  { inputPerMTok: 0.60,  outputPerMTok: 2.19  },
+  "deepseek-ai/deepseek-v3.2":                 { inputPerMTok: 0.20,  outputPerMTok: 0.60  },
+  "mistralai/mixtral-8x22b-instruct-v0.1":     { inputPerMTok: 0.60,  outputPerMTok: 0.60  },
+  "google/gemma-3-27b-it":                     { inputPerMTok: 0.20,  outputPerMTok: 0.20  },
 };
 
 const FLYIO_PER_SECOND = 0.0000019; // shared-cpu-1x
