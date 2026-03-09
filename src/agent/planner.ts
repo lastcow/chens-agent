@@ -211,7 +211,7 @@ Thought: reasoning about what to do next
 Action: tool_name({"param": "value"})
 Observation: [result]
 ... repeat ...
-Final Answer: summary of what was accomplished
+Final Answer: <complete answer with ALL data retrieved — include full lists, tables, names, scores, IDs. Never summarize or truncate. The professor needs the actual data, not a description of it.>
 
 If you need a tool that doesn't exist, say:
 NEED_TOOL: description of the capability needed`,
