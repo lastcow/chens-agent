@@ -4,79 +4,48 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import OpenAI from "openai";
 import { getApprovedTools, executeTool } from "../tools/registry.js";
 import { evolveNewTool } from "./evolution.js";
 import { db } from "../db/client.js";
 import { TaskStatus } from "@prisma/client";
 
-const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-const genai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const nvidia = new OpenAI({
-  baseURL: "https://integrate.api.nvidia.com/v1",
-  apiKey: process.env.NVIDIA_API_KEY!,
+// Single OpenRouter client — one key, all models
+const openrouter = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  defaultHeaders: {
+    "HTTP-Referer": "https://chen.me",
+    "X-Title": "ChensAgent",
+  },
 });
 
-function isGeminiModel(model: string) { return model.startsWith("gemini"); }
-function isNvidiaModel(model: string)  { return NVIDIA_MODELS.has(model); }
-
-// Curated NVIDIA NIM models available via integrate.api.nvidia.com
-export const NVIDIA_MODELS = new Set([
-  "meta/llama-3.3-70b-instruct",
-  "meta/llama-3.1-405b-instruct",
-  "nvidia/llama-3.1-nemotron-70b-instruct",
-  "deepseek-ai/deepseek-r1-distill-qwen-32b",
-  "deepseek-ai/deepseek-v3.2",
-  "mistralai/mixtral-8x22b-instruct-v0.1",
-  "google/gemma-3-27b-it",
-]);
+// Anthropic client kept only for tool-use/structured output if needed
+const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? "" });
 
 function msgText(m: Anthropic.MessageParam): string {
   return typeof m.content === "string" ? m.content : (m.content[0] as { text: string }).text;
 }
 
+// All models route through OpenRouter (OpenAI-compatible)
 async function callLLM(model: string, messages: Anthropic.MessageParam[], _systemPrompt: string): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
-  if (isGeminiModel(model)) {
-    const gemModel = genai.getGenerativeModel({
-      model,
-      systemInstruction: { role: "user", parts: [{ text: "You are a helpful AI agent." }] },
-    });
-    const allMessages = messages.map(m => ({
-      role: m.role === "assistant" ? "model" as const : "user" as const,
-      parts: [{ text: msgText(m) }],
-    }));
-    const history = allMessages.slice(0, -1);
-    const lastText = msgText(messages[messages.length - 1]);
-    const chat = gemModel.startChat({ history });
-    const result = await chat.sendMessage(lastText);
-    const text = result.response.text();
-    const meta = result.response.usageMetadata;
-    return { text, inputTokens: meta?.promptTokenCount ?? 0, outputTokens: meta?.candidatesTokenCount ?? 0 };
-  }
+  const oaiMessages = messages.map(m => ({
+    role: m.role as "user" | "assistant",
+    content: msgText(m),
+  }));
 
-  if (isNvidiaModel(model)) {
-    const oaiMessages = messages.map(m => ({
-      role: m.role as "user" | "assistant",
-      content: msgText(m),
-    }));
-    const resp = await nvidia.chat.completions.create({
-      model,
-      messages: oaiMessages,
-      max_tokens: 1500,
-    });
-    const text = resp.choices[0]?.message?.content ?? "";
-    return {
-      text,
-      inputTokens: resp.usage?.prompt_tokens ?? 0,
-      outputTokens: resp.usage?.completion_tokens ?? 0,
-    };
-  }
+  const resp = await openrouter.chat.completions.create({
+    model,
+    messages: oaiMessages,
+    max_tokens: 1500,
+  });
 
-  // Anthropic Claude (default)
-  const response = await claude.messages.create({ model, max_tokens: 1500, messages });
-  const text = response.content[0].type === "text" ? response.content[0].text : "";
-  return { text, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens };
+  const text = resp.choices[0]?.message?.content ?? "";
+  return {
+    text,
+    inputTokens: resp.usage?.prompt_tokens ?? 0,
+    outputTokens: resp.usage?.completion_tokens ?? 0,
+  };
 }
 
 const MAX_STEPS = 15;
@@ -86,7 +55,13 @@ async function logRunToChensAPI(userId: string, model: string, usage: UsageSumma
   const apiKey  = process.env.CHENS_API_SECRET_KEY;
   if (!apiUrl || !apiKey) return;
 
-  const provider = isNvidiaModel(model) ? "nvidia" : isGeminiModel(model) ? "google" : "anthropic";
+  // Infer provider from OpenRouter model id prefix
+  const provider = model.startsWith("openai/") ? "openai"
+    : model.startsWith("google/") ? "google"
+    : model.startsWith("meta-llama/") || model.startsWith("meta/") ? "meta"
+    : model.startsWith("deepseek/") ? "deepseek"
+    : model.startsWith("mistralai/") ? "mistral"
+    : "anthropic";
 
   await fetch(`${apiUrl}/api/user/agent-runs`, {
     method: "POST",
@@ -112,23 +87,19 @@ async function logRunToChensAPI(userId: string, model: string, usage: UsageSumma
   });
 }
 
-const DEFAULT_MODEL = "claude-haiku-4-5-20251001";
+// Default: cheap + fast via OpenRouter
+const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 
+// OpenRouter model pricing (per 1M tokens)
 const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
-  // Anthropic
-  "claude-haiku-4-5-20251001":  { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
-  "claude-sonnet-4-5-20250929": { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
-  "claude-sonnet-4-6":          { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
-  // Google
-  "gemini-2.5-flash":           { inputPerMTok: 0.15,  outputPerMTok: 0.60  },
-  // NVIDIA NIM
-  "meta/llama-3.3-70b-instruct":               { inputPerMTok: 0.77,  outputPerMTok: 0.77  },
-  "meta/llama-3.1-405b-instruct":              { inputPerMTok: 5.00,  outputPerMTok: 16.00 },
-  "nvidia/llama-3.1-nemotron-70b-instruct":    { inputPerMTok: 0.35,  outputPerMTok: 0.40  },
-  "deepseek-ai/deepseek-r1-distill-qwen-32b":  { inputPerMTok: 0.60,  outputPerMTok: 2.19  },
-  "deepseek-ai/deepseek-v3.2":                 { inputPerMTok: 0.20,  outputPerMTok: 0.60  },
-  "mistralai/mixtral-8x22b-instruct-v0.1":     { inputPerMTok: 0.60,  outputPerMTok: 0.60  },
-  "google/gemma-3-27b-it":                     { inputPerMTok: 0.20,  outputPerMTok: 0.20  },
+  "anthropic/claude-haiku-4-5":          { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
+  "anthropic/claude-sonnet-4-5":         { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
+  "anthropic/claude-opus-4":             { inputPerMTok: 15.00, outputPerMTok: 75.00 },
+  "openai/gpt-4o":                       { inputPerMTok: 2.50,  outputPerMTok: 10.00 },
+  "openai/gpt-4o-mini":                  { inputPerMTok: 0.15,  outputPerMTok: 0.60  },
+  "google/gemini-2.0-flash-001":         { inputPerMTok: 0.10,  outputPerMTok: 0.40  },
+  "meta-llama/llama-3.3-70b-instruct":   { inputPerMTok: 0.12,  outputPerMTok: 0.30  },
+  "deepseek/deepseek-chat-v3-0324":      { inputPerMTok: 0.27,  outputPerMTok: 1.10  },
 };
 
 const FLYIO_PER_SECOND = 0.0000019; // shared-cpu-1x
