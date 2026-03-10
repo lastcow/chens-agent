@@ -85,52 +85,50 @@ export async function processGradeQueue(): Promise<{
   let processed = 0;
   let skipped = 0;
 
-  // 1. Claim pending requests (lock with in_progress)
-  const pendingRequests = await sql.query<{
-    id: string; user_id: string; assignment_id: number;
-    course_canvas_id: number; assignment_name: string; course_name: string;
-  }>(
+  // 1. Claim pending requests atomically
+  const pendingRequests = (await sql.query(
     `UPDATE prof_requests SET status='in_progress'
      WHERE id IN (
        SELECT id FROM prof_requests WHERE status='pending' ORDER BY created_at LIMIT 10
      )
      RETURNING id, user_id, assignment_id, course_canvas_id, assignment_name, course_name`,
     []
-  );
+  )) as Array<{
+    id: string; user_id: string; assignment_id: number;
+    course_canvas_id: number; assignment_name: string; course_name: string;
+  }>;
 
   if (!pendingRequests.length) return { processed: 0, skipped: 0, errors: [] };
 
   for (const req of pendingRequests) {
     try {
       // 2. Get Canvas token
-      const tokenRows = await sql.query<{ canvas_token: string }>(
+      const tokenRows = (await sql.query(
         `SELECT canvas_token FROM user_profile WHERE user_id = $1`, [req.user_id]
-      );
+      )) as Array<{ canvas_token: string }>;
+
       const enc = tokenRows[0]?.canvas_token;
       if (!enc) {
-        errors.push(`${req.assignment_name}: no Canvas token for user`);
+        errors.push(`${req.assignment_name}: no Canvas token`);
         await sql.query(`UPDATE prof_requests SET status='pending' WHERE id=$1`, [req.id]);
         skipped++; continue;
       }
       const canvasToken = decryptToken(enc);
 
       // 3. Get assignment details
-      const [asg] = await sql.query<{
-        canvas_id: number; name: string; description: string; points_possible: number;
-      }>(
+      const asgRows = (await sql.query(
         `SELECT canvas_id, name, description, points_possible FROM prof_assignments WHERE id=$1`,
         [req.assignment_id]
-      );
-      if (!asg) {
-        errors.push(`${req.assignment_name}: assignment not found in DB`);
+      )) as Array<{ canvas_id: number; name: string; description: string; points_possible: number }>;
+
+      if (!asgRows.length) {
+        errors.push(`${req.assignment_name}: not found in DB`);
         skipped++; continue;
       }
+      const asg = asgRows[0];
 
-      // 4. Get ungraded submissions not already in staging
-      const subs = await sql.query<{
-        sub_id: number; canvas_uid: number; student_name: string;
-        workflow_state: string; late: boolean; student_comment: string;
-      }>(
+      // 4. Get ungraded submissions not already staged
+      const subs = (await sql.query(
         `SELECT sub.id AS sub_id, s.canvas_uid, s.name AS student_name,
                 sub.workflow_state, sub.late, sub.student_comment
          FROM prof_submissions sub
@@ -142,7 +140,10 @@ export async function processGradeQueue(): Promise<{
            AND g.id IS NULL
            AND pgs.id IS NULL`,
         [req.assignment_id]
-      );
+      )) as Array<{
+        sub_id: number; canvas_uid: number; student_name: string;
+        workflow_state: string; late: boolean; student_comment: string;
+      }>;
 
       if (!subs.length) {
         await sql.query(`UPDATE prof_requests SET status='completed' WHERE id=$1`, [req.id]);
@@ -153,7 +154,6 @@ export async function processGradeQueue(): Promise<{
       let staged = 0;
       for (const sub of subs) {
         try {
-          // Fetch Canvas submission for body/attachments
           const canvasSub = await canvasFetch(
             `/courses/${req.course_canvas_id}/assignments/${asg.canvas_id}/submissions/${sub.canvas_uid}?include[]=attachments`,
             canvasToken
@@ -179,7 +179,6 @@ export async function processGradeQueue(): Promise<{
             studentComment: sub.student_comment ?? "",
           });
 
-          // Insert into staging
           await sql.query(
             `INSERT INTO prof_grade_staging
                (request_id, submission_id, student_name, student_canvas_uid, assignment_name,
@@ -194,6 +193,7 @@ export async function processGradeQueue(): Promise<{
             ]
           );
           staged++;
+          console.log(`  [queue] Graded ${sub.student_name}: ${result.score}/${asg.points_possible}`);
         } catch (subErr: any) {
           errors.push(`${sub.student_name}: ${subErr.message}`);
         }
@@ -205,7 +205,6 @@ export async function processGradeQueue(): Promise<{
       } else {
         skipped++;
       }
-      // Leave status as in_progress — requester must approve/reject
 
     } catch (reqErr: any) {
       errors.push(`Request ${req.id}: ${reqErr.message}`);
