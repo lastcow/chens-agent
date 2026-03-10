@@ -3,8 +3,10 @@
  */
 import OpenAI from "openai";
 import mammoth from "mammoth";
-// @ts-ignore — pdf-parse ESM export issue
-import pdfParse from "pdf-parse/node";
+import { createRequire } from "module";
+const _require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pdfParse: (buf: Buffer) => Promise<{ text: string }> = _require("pdf-parse");
 import { canvasRequest, setActiveToken } from "../canvas/client.js";
 
 /** Download a Canvas attachment and extract plain text */
