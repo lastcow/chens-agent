@@ -48,7 +48,7 @@ async function extractImageContent(url: string, filename: string, token: string)
 }
 
 /** Download a Canvas attachment and extract plain text */
-async function extractAttachmentText(url: string, filename: string, token: string): Promise<string> {
+export async function extractAttachmentText(url: string, filename: string, token: string): Promise<string> {
   try {
     const ext = filename.split(".").pop()?.toLowerCase() ?? "";
 

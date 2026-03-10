@@ -10,6 +10,7 @@ import { seedCoreTools } from "../tools/seed.js";
 import { enqueueTask } from "../queue/worker.js";
 import { TaskStatus } from "@prisma/client";
 import { gradeAssignmentPreview, applyGrades } from "../grader/index.js";
+import { processGradeQueue } from "../grader/queue-processor.js";
 
 const app = express();
 app.use(express.json());
@@ -173,6 +174,18 @@ app.post("/grade/apply", async (req, res) => {
   }
   try {
     const result = await applyGrades(course_canvas_id, assignment_canvas_id, canvas_token, grades);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ─── Process grade queue ──────────────────────────────────────────
+app.post("/grade/process-queue", async (_req, res) => {
+  try {
+    console.log("[queue] Processing grade requests...");
+    const result = await processGradeQueue();
+    console.log(`[queue] Done: ${result.processed} processed, ${result.skipped} skipped, ${result.errors.length} errors`);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
