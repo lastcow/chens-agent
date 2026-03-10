@@ -92,6 +92,7 @@ const DEFAULT_MODEL = "anthropic/claude-haiku-4-5";
 
 // OpenRouter model pricing (per 1M tokens)
 const MODEL_PRICING: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
+  "openrouter/auto":             { inputPerMTok: 3.00,  outputPerMTok: 15.00 }, // estimated avg
   "anthropic/claude-haiku-4-5":          { inputPerMTok: 0.80,  outputPerMTok: 4.00  },
   "anthropic/claude-sonnet-4-5":         { inputPerMTok: 3.00,  outputPerMTok: 15.00 },
   "anthropic/claude-opus-4":             { inputPerMTok: 15.00, outputPerMTok: 75.00 },
