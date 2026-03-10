@@ -9,13 +9,57 @@ const _require = createRequire(import.meta.url);
 const pdfParse: (buf: Buffer) => Promise<{ text: string }> = _require("pdf-parse");
 import { canvasRequest, setActiveToken } from "../canvas/client.js";
 
+const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"]);
+
+/** Use vision LLM to describe image content for grading */
+async function extractImageContent(url: string, filename: string, token: string): Promise<string> {
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return `[Could not download image: ${filename}]`;
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "jpeg";
+    const mimeType = ext === "png" ? "image/png" : ext === "gif" ? "image/gif" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const b64 = buf.toString("base64");
+
+    const visionResp = await openrouter.chat.completions.create({
+      model: "openai/gpt-4o-mini", // cheap vision model
+      max_tokens: 1000,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "This is a student assignment submission image. Describe ALL content thoroughly: text, diagrams, equations, code, K-maps, circuit diagrams, handwriting, or any work shown. Be complete — this description will be used to grade the student.",
+          },
+          {
+            type: "image_url",
+            image_url: { url: `data:${mimeType};base64,${b64}` },
+          },
+        ],
+      }],
+    });
+
+    const description = visionResp.choices[0]?.message?.content ?? "";
+    return `[Image: ${filename}]\n${description}`;
+  } catch (err) {
+    return `[Failed to analyze image ${filename}: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+}
+
 /** Download a Canvas attachment and extract plain text */
 async function extractAttachmentText(url: string, filename: string, token: string): Promise<string> {
   try {
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+
+    // Route images to vision model
+    if (IMAGE_EXTS.has(ext)) {
+      return extractImageContent(url, filename, token);
+    }
+
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return `[Could not download: ${filename}]`;
 
-    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
     const buf = Buffer.from(await res.arrayBuffer());
 
     if (ext === "docx" || ext === "doc") {
@@ -26,7 +70,7 @@ async function extractAttachmentText(url: string, filename: string, token: strin
       const result = await pdfParse(buf);
       return result.text.slice(0, 8000).trim() || `[Empty PDF: ${filename}]`;
     }
-    if (["txt", "md", "py", "js", "ts", "java", "c", "cpp", "html", "css"].includes(ext)) {
+    if (["txt", "md", "py", "js", "ts", "java", "c", "cpp", "html", "css", "sh", "sql"].includes(ext)) {
       return buf.toString("utf8").slice(0, 8000).trim();
     }
     return `[Attachment: ${filename} (${ext.toUpperCase()} — not parsed)]`;
