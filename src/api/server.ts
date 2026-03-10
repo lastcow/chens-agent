@@ -9,6 +9,7 @@ import { getApprovedTools } from "../tools/registry.js";
 import { seedCoreTools } from "../tools/seed.js";
 import { enqueueTask } from "../queue/worker.js";
 import { TaskStatus } from "@prisma/client";
+import { gradeAssignmentPreview, applyGrades } from "../grader/index.js";
 
 const app = express();
 app.use(express.json());
@@ -146,6 +147,36 @@ app.get("/tasks/:id/stream", async (req, res) => {
   }, 2000);
 
   req.on("close", () => clearInterval(interval));
+});
+
+// ─── Grade preview ────────────────────────────────────────────────
+app.post("/grade/preview", async (req, res) => {
+  const { course_canvas_id, assignment_canvas_id, canvas_token, model } = req.body;
+  if (!course_canvas_id || !assignment_canvas_id || !canvas_token) {
+    res.status(400).json({ error: "course_canvas_id, assignment_canvas_id, canvas_token required" });
+    return;
+  }
+  try {
+    const preview = await gradeAssignmentPreview(course_canvas_id, assignment_canvas_id, canvas_token, model);
+    res.json(preview);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ─── Apply grades ─────────────────────────────────────────────────
+app.post("/grade/apply", async (req, res) => {
+  const { course_canvas_id, assignment_canvas_id, canvas_token, grades } = req.body;
+  if (!course_canvas_id || !assignment_canvas_id || !canvas_token || !grades) {
+    res.status(400).json({ error: "course_canvas_id, assignment_canvas_id, canvas_token, grades required" });
+    return;
+  }
+  try {
+    const result = await applyGrades(course_canvas_id, assignment_canvas_id, canvas_token, grades);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 export async function startServer(): Promise<void> {
