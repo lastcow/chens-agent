@@ -2,7 +2,36 @@
  * Grading orchestration — fetches submissions, calls OpenRouter LLM, returns structured preview
  */
 import OpenAI from "openai";
+import mammoth from "mammoth";
+// @ts-ignore — pdf-parse ESM export issue
+import pdfParse from "pdf-parse/node";
 import { canvasRequest, setActiveToken } from "../canvas/client.js";
+
+/** Download a Canvas attachment and extract plain text */
+async function extractAttachmentText(url: string, filename: string, token: string): Promise<string> {
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return `[Could not download: ${filename}]`;
+
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    const buf = Buffer.from(await res.arrayBuffer());
+
+    if (ext === "docx" || ext === "doc") {
+      const result = await mammoth.extractRawText({ buffer: buf });
+      return result.value.slice(0, 8000).trim() || `[Empty DOCX: ${filename}]`;
+    }
+    if (ext === "pdf") {
+      const result = await pdfParse(buf);
+      return result.text.slice(0, 8000).trim() || `[Empty PDF: ${filename}]`;
+    }
+    if (["txt", "md", "py", "js", "ts", "java", "c", "cpp", "html", "css"].includes(ext)) {
+      return buf.toString("utf8").slice(0, 8000).trim();
+    }
+    return `[Attachment: ${filename} (${ext.toUpperCase()} — not parsed)]`;
+  } catch (err) {
+    return `[Failed to parse ${filename}: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+}
 
 const openrouter = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
@@ -70,17 +99,28 @@ export async function gradeAssignmentPreview(
       };
     }
 
-    const submissionsText = toGrade.map(sub => {
+    // Extract text content for each submission (including attachments)
+    const activeToken = canvasToken;
+    const submissionsText = (await Promise.all(toGrade.map(async sub => {
       const name = sub.user?.name ?? `Student ${sub.user_id}`;
       const lateStr = sub.late ? `YES (${Math.round((sub.seconds_late ?? 0) / 3600)}hrs late)` : "No";
       const comment = sub.submission_comments?.[0]?.comment;
+
       let content = "";
-      if (sub.body) content += sub.body.replace(/<[^>]*>/g, " ").trim();
+      if (sub.body) content += sub.body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
       if (sub.url) content += ` URL: ${sub.url}`;
-      if (sub.attachments?.length) content += " " + sub.attachments.map((a: any) => `[Attachment: ${a.display_name}]`).join(" ");
-      if (!content) content = "[No text content]";
-      return `---\nStudent: ${name} (Canvas UID: ${sub.user_id})\nSubmitted: ${sub.submitted_at ?? "unknown"} | Late: ${lateStr}${comment ? `\nStudent comment: "${comment}"` : ""}\nContent: ${content}\n---`;
-    }).join("\n");
+
+      // Download and extract text from each attachment
+      if (sub.attachments?.length) {
+        const attachTexts = await Promise.all(
+          sub.attachments.map((a: any) => extractAttachmentText(a.url, a.display_name, activeToken))
+        );
+        content += "\n" + attachTexts.join("\n");
+      }
+
+      if (!content.trim()) content = "[No text content]";
+      return `---\nStudent: ${name} (Canvas UID: ${sub.user_id})\nSubmitted: ${sub.submitted_at ?? "unknown"} | Late: ${lateStr}${comment ? `\nStudent comment: "${comment}"` : ""}\nContent: ${content.trim()}\n---`;
+    }))).join("\n");
 
     const descText = assignment.description
       ? assignment.description.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 2000)
