@@ -104,7 +104,7 @@ export async function processGradeQueue(): Promise<{
     try {
       // 2. Check canvas_lms module is enabled for this user
       const moduleRows = (await sql.query(
-        `SELECT enabled FROM "UserModule" WHERE user_id = $1 AND module = 'canvas_lms'`, [req.user_id]
+        `SELECT enabled FROM user_modules WHERE user_id = $1 AND module = 'canvas_lms'`, [req.user_id]
       )) as Array<{ enabled: boolean }>;
 
       if (!moduleRows[0]?.enabled) {
