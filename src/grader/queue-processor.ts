@@ -102,7 +102,18 @@ export async function processGradeQueue(): Promise<{
 
   for (const req of pendingRequests) {
     try {
-      // 2. Get Canvas token
+      // 2. Check canvas_lms module is enabled for this user
+      const moduleRows = (await sql.query(
+        `SELECT enabled FROM "UserModule" WHERE user_id = $1 AND module = 'canvas_lms'`, [req.user_id]
+      )) as Array<{ enabled: boolean }>;
+
+      if (!moduleRows[0]?.enabled) {
+        errors.push(`${req.assignment_name}: canvas_lms module not enabled for user ${req.user_id}`);
+        await sql.query(`UPDATE prof_requests SET status='pending' WHERE id=$1`, [req.id]);
+        skipped++; continue;
+      }
+
+      // 3. Get Canvas token
       const tokenRows = (await sql.query(
         `SELECT canvas_token FROM user_profile WHERE user_id = $1`, [req.user_id]
       )) as Array<{ canvas_token: string }>;
